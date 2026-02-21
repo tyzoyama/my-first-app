@@ -4,20 +4,30 @@ const path = require("path");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const isVercel = !!process.env.VERCEL;
 const DATA_FILE = path.join(__dirname, "todos.json");
 
+// Vercel ではインメモリストアを使用
+let memoryTodos = [];
+
 app.use(express.json());
-app.use(express.static(__dirname));
+app.use(express.static(path.join(__dirname, "public"), { index: "index.html" }));
+
+app.get("/", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
 
 function readTodos() {
-  if (!fs.existsSync(DATA_FILE)) {
-    return [];
-  }
-  const data = fs.readFileSync(DATA_FILE, "utf-8");
-  return JSON.parse(data);
+  if (isVercel) return memoryTodos;
+  if (!fs.existsSync(DATA_FILE)) return [];
+  return JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
 }
 
 function writeTodos(todos) {
+  if (isVercel) {
+    memoryTodos = todos;
+    return;
+  }
   fs.writeFileSync(DATA_FILE, JSON.stringify(todos, null, 2));
 }
 
@@ -67,6 +77,12 @@ app.delete("/api/todos/:id", (req, res) => {
   res.status(204).end();
 });
 
-app.listen(PORT, () => {
-  console.log(`サーバー起動: http://localhost:${PORT}`);
-});
+// Vercel 向けにエクスポート
+module.exports = app;
+
+// ローカル実行時のみリッスン
+if (!isVercel) {
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`サーバー起動: http://localhost:${PORT}`);
+  });
+}
