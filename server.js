@@ -1,14 +1,22 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+const { Redis } = require("@upstash/redis");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const isVercel = !!process.env.VERCEL;
 const DATA_FILE = path.join(__dirname, "todos.json");
+const REDIS_KEY = "todos";
 
-// Vercel ではインメモリストアを使用
-let memoryTodos = [];
+// Upstash Redis クライアント（環境変数が設定されている場合のみ）
+let redis = null;
+if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
+  redis = new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN,
+  });
+}
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public"), { index: "index.html" }));
@@ -17,64 +25,84 @@ app.get("/", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
-function readTodos() {
-  if (isVercel) return memoryTodos;
+// ストレージ操作（Redis > ファイル のフォールバック）
+async function readTodos() {
+  if (redis) {
+    const data = await redis.get(REDIS_KEY);
+    return data || [];
+  }
   if (!fs.existsSync(DATA_FILE)) return [];
   return JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
 }
 
-function writeTodos(todos) {
-  if (isVercel) {
-    memoryTodos = todos;
+async function writeTodos(todos) {
+  if (redis) {
+    await redis.set(REDIS_KEY, todos);
     return;
   }
   fs.writeFileSync(DATA_FILE, JSON.stringify(todos, null, 2));
 }
 
 // 全タスク取得
-app.get("/api/todos", (_req, res) => {
-  res.json(readTodos());
+app.get("/api/todos", async (_req, res) => {
+  try {
+    res.json(await readTodos());
+  } catch (err) {
+    res.status(500).json({ error: "データの取得に失敗しました" });
+  }
 });
 
 // タスク追加
-app.post("/api/todos", (req, res) => {
+app.post("/api/todos", async (req, res) => {
   const { text } = req.body;
   if (!text || typeof text !== "string" || !text.trim()) {
     return res.status(400).json({ error: "テキストは必須です" });
   }
-  const todos = readTodos();
-  const todo = {
-    id: Date.now().toString(),
-    text: text.trim(),
-    completed: false,
-  };
-  todos.push(todo);
-  writeTodos(todos);
-  res.status(201).json(todo);
+  try {
+    const todos = await readTodos();
+    const todo = {
+      id: Date.now().toString(),
+      text: text.trim(),
+      completed: false,
+    };
+    todos.push(todo);
+    await writeTodos(todos);
+    res.status(201).json(todo);
+  } catch (err) {
+    res.status(500).json({ error: "タスクの追加に失敗しました" });
+  }
 });
 
 // タスク完了切り替え
-app.patch("/api/todos/:id", (req, res) => {
-  const todos = readTodos();
-  const todo = todos.find((t) => t.id === req.params.id);
-  if (!todo) {
-    return res.status(404).json({ error: "タスクが見つかりません" });
+app.patch("/api/todos/:id", async (req, res) => {
+  try {
+    const todos = await readTodos();
+    const todo = todos.find((t) => t.id === req.params.id);
+    if (!todo) {
+      return res.status(404).json({ error: "タスクが見つかりません" });
+    }
+    todo.completed = !todo.completed;
+    await writeTodos(todos);
+    res.json(todo);
+  } catch (err) {
+    res.status(500).json({ error: "タスクの更新に失敗しました" });
   }
-  todo.completed = !todo.completed;
-  writeTodos(todos);
-  res.json(todo);
 });
 
 // タスク削除
-app.delete("/api/todos/:id", (req, res) => {
-  let todos = readTodos();
-  const index = todos.findIndex((t) => t.id === req.params.id);
-  if (index === -1) {
-    return res.status(404).json({ error: "タスクが見つかりません" });
+app.delete("/api/todos/:id", async (req, res) => {
+  try {
+    let todos = await readTodos();
+    const index = todos.findIndex((t) => t.id === req.params.id);
+    if (index === -1) {
+      return res.status(404).json({ error: "タスクが見つかりません" });
+    }
+    todos.splice(index, 1);
+    await writeTodos(todos);
+    res.status(204).end();
+  } catch (err) {
+    res.status(500).json({ error: "タスクの削除に失敗しました" });
   }
-  todos.splice(index, 1);
-  writeTodos(todos);
-  res.status(204).end();
 });
 
 // Vercel 向けにエクスポート
