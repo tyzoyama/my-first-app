@@ -4,11 +4,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const list = document.getElementById("todo-list");
   const emptyMessage = document.getElementById("empty-message");
 
-  let todos = JSON.parse(localStorage.getItem("todos")) || [];
-
-  function saveTodos() {
-    localStorage.setItem("todos", JSON.stringify(todos));
-  }
+  let todos = [];
 
   function updateEmptyMessage() {
     if (todos.length === 0) {
@@ -20,7 +16,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function renderTodos() {
     list.innerHTML = "";
-    todos.forEach((todo, index) => {
+    todos.forEach((todo) => {
       const li = document.createElement("li");
       li.className = "todo-item" + (todo.completed ? " completed" : "");
 
@@ -28,7 +24,7 @@ document.addEventListener("DOMContentLoaded", () => {
       checkbox.type = "checkbox";
       checkbox.className = "todo-checkbox";
       checkbox.checked = todo.completed;
-      checkbox.addEventListener("change", () => toggleTodo(index));
+      checkbox.addEventListener("change", () => toggleTodo(todo.id));
 
       const span = document.createElement("span");
       span.className = "todo-text";
@@ -37,7 +33,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const deleteBtn = document.createElement("button");
       deleteBtn.className = "delete-btn";
       deleteBtn.textContent = "削除";
-      deleteBtn.addEventListener("click", () => deleteTodo(index));
+      deleteBtn.addEventListener("click", () => deleteTodo(todo.id));
 
       li.appendChild(checkbox);
       li.appendChild(span);
@@ -47,22 +43,29 @@ document.addEventListener("DOMContentLoaded", () => {
     updateEmptyMessage();
   }
 
-  function addTodo(text) {
-    todos.push({ text: text, completed: false });
-    saveTodos();
+  async function fetchTodos() {
+    const res = await fetch("/api/todos");
+    todos = await res.json();
     renderTodos();
   }
 
-  function toggleTodo(index) {
-    todos[index].completed = !todos[index].completed;
-    saveTodos();
-    renderTodos();
+  async function addTodo(text) {
+    await fetch("/api/todos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    await fetchTodos();
   }
 
-  function deleteTodo(index) {
-    todos.splice(index, 1);
-    saveTodos();
-    renderTodos();
+  async function toggleTodo(id) {
+    await fetch(`/api/todos/${id}`, { method: "PATCH" });
+    await fetchTodos();
+  }
+
+  async function deleteTodo(id) {
+    await fetch(`/api/todos/${id}`, { method: "DELETE" });
+    await fetchTodos();
   }
 
   form.addEventListener("submit", (e) => {
@@ -75,5 +78,5 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  renderTodos();
+  fetchTodos();
 });
